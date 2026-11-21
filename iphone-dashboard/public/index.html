@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iPhone Dashboard</title>
+<style>
+  :root{--bg:#0f172a;--card:#1e293b;--fg:#e2e8f0;--mut:#94a3b8;--x:#38bdf8;--y:#4ade80;--z:#fb923c}
+  *{box-sizing:border-box}
+  body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif}
+  header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#ef4444;margin-right:6px}
+  .dot.on{background:#22c55e}
+  .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+  .card{background:var(--card);border-radius:12px;padding:14px}
+  .card h3{margin:0 0 8px;font-size:13px;color:var(--mut);font-weight:500;text-transform:uppercase;letter-spacing:.05em}
+  .big{font-size:28px;font-weight:600}
+  canvas{width:100%;height:140px;display:block}
+  .row{display:flex;justify-content:space-between;padding:3px 0;font-variant-numeric:tabular-nums}
+  .legend span{margin-right:10px;font-size:12px}
+  #compass{height:160px}
+</style>
+</head>
+<body>
+<header><h2 style="margin:0">iPhone Dashboard</h2><div><span class="dot" id="dot"></span><span id="conn">Đang kết nối…</span></div></header>
+<div class="grid">
+  <div class="card"><h3>Gia tốc (m/s²)</h3><canvas id="acc"></canvas>
+    <div class="legend"><span style="color:var(--x)">● X</span><span style="color:var(--y)">● Y</span><span style="color:var(--z)">● Z</span></div></div>
+  <div class="card"><h3>Hướng la bàn</h3><canvas id="compass"></canvas><div class="big" id="heading">–</div></div>
+  <div class="card"><h3>Góc nghiêng</h3>
+    <div class="row"><span>Alpha</span><b id="alpha">–</b></div>
+    <div class="row"><span>Beta</span><b id="beta">–</b></div>
+    <div class="row"><span>Gamma</span><b id="gamma">–</b></div></div>
+  <div class="card"><h3>Vị trí GPS</h3>
+    <div class="row"><span>Vĩ độ</span><b id="lat">–</b></div>
+    <div class="row"><span>Kinh độ</span><b id="lon">–</b></div>
+    <div class="row"><span>Độ chính xác</span><b id="acc2">–</b></div>
+    <div class="row"><span>Tốc độ</span><b id="speed">–</b></div>
+    <div class="row"><span>Độ cao</span><b id="alt">–</b></div></div>
+  <div class="card"><h3>Mạng & trạng thái</h3>
+    <div class="row"><span>Online</span><b id="online">–</b></div>
+    <div class="row"><span>Loại mạng</span><b id="ntype">–</b></div>
+    <div class="row"><span>Downlink</span><b id="down">–</b></div>
+    <div class="row"><span>Cập nhật</span><b id="age">–</b></div></div>
+</div>
+<script>
+const token = new URLSearchParams(location.search).get('token') ?? '';
+const $ = (id) => document.getElementById(id);
+const fmt = (v, d = 1, u = '') => (typeof v === 'number' ? v.toFixed(d) + u : '–');
+const HISTORY = 150;
+const hist = { x: [], y: [], z: [] };
+let lastT = 0;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws?role=dashboard&token=${encodeURIComponent(token)}`);
+  ws.onopen = () => { $('dot').classList.add('on'); $('conn').textContent = 'Đã kết nối'; };
+  ws.onclose = () => { $('dot').classList.remove('on'); $('conn').textContent = 'Mất kết nối'; setTimeout(connect, 2000); };
+  ws.onmessage = (e) => { try { render(JSON.parse(e.data)); } catch {} };
+}
+
+function push(arr, v) { arr.push(typeof v === 'number' ? v : 0); if (arr.length > HISTORY) arr.shift(); }
+
+function render(d) {
+  lastT = d.t ?? lastT;
+  if (d.motion) {
+    const m = d.motion;
+    push(hist.x, m.ax); push(hist.y, m.ay); push(hist.z, m.az);
+    $('alpha').textContent = fmt(m.alpha, 0, '°');
+    $('beta').textContent = fmt(m.beta, 0, '°');
+    $('gamma').textContent = fmt(m.gamma, 0, '°');
+    $('heading').textContent = fmt(m.heading, 0, '°');
+    drawCompass(m.heading);
+    drawChart();
+  }
+  if (d.geo) {
+    $('lat').textContent = fmt(d.geo.lat, 6);
+    $('lon').textContent = fmt(d.geo.lon, 6);
+    $('acc2').textContent = fmt(d.geo.acc, 0, ' m');
+    $('speed').textContent = fmt(d.geo.speed * 3.6, 1, ' km/h');
+    $('alt').textContent = fmt(d.geo.alt, 0, ' m');
+  }
+  if (d.net) {
+    $('online').textContent = d.net.online ? 'Có' : 'Không';
+    $('ntype').textContent = d.net.type ?? '–';
+    $('down').textContent = fmt(d.net.downlink, 1, ' Mbps');
+  }
+}
+
+function setup(c) {
+  const r = devicePixelRatio || 1;
+  c.width = c.clientWidth * r; c.height = c.clientHeight * r;
+  const g = c.getContext('2d'); g.setTransform(r, 0, 0, r, 0, 0);
+  return [g, c.clientWidth, c.clientHeight];
+}
+
+function drawChart() {
+  const [g, w, h] = setup($('acc'));
+  g.clearRect(0, 0, w, h);
+  g.strokeStyle = '#334155'; g.beginPath(); g.moveTo(0, h / 2); g.lineTo(w, h / 2); g.stroke();
+  const range = 20; // ±20 m/s²
+  [['x', '#38bdf8'], ['y', '#4ade80'], ['z', '#fb923c']].forEach(([k, col]) => {
+    g.strokeStyle = col; g.lineWidth = 1.5; g.beginPath();
+    hist[k].forEach((v, i) => {
+      const px = (i / (HISTORY - 1)) * w;
+      const py = h / 2 - (Math.max(-range, Math.min(range, v)) / range) * (h / 2);
+      i ? g.lineTo(px, py) : g.moveTo(px, py);
+    });
+    g.stroke();
+  });
+}
+
+function drawCompass(deg) {
+  const [g, w, h] = setup($('compass'));
+  g.clearRect(0, 0, w, h);
+  const cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2 - 8;
+  g.strokeStyle = '#475569'; g.lineWidth = 2; g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = '#94a3b8'; g.font = '12px system-ui'; g.textAlign = 'center';
+  g.fillText('N', cx, cy - r + 14);
+  if (typeof deg !== 'number') return;
+  const a = (deg - 90) * Math.PI / 180;
+  g.strokeStyle = '#f87171'; g.lineWidth = 3; g.beginPath();
+  g.moveTo(cx, cy); g.lineTo(cx + Math.cos(a) * (r - 18), cy + Math.sin(a) * (r - 18)); g.stroke();
+}
+
+setInterval(() => { $('age').textContent = lastT ? ((Date.now() - lastT) / 1000).toFixed(1) + ' s trước' : '–'; }, 500);
+drawChart(); drawCompass(null);
+connect();
+</script>
+</body>
+</html>

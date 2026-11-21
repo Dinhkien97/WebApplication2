@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>iPhone Sensor</title>
+<style>
+  body{font-family:-apple-system,system-ui,sans-serif;margin:0;padding:24px;background:#0f172a;color:#e2e8f0}
+  button{font-size:18px;padding:14px 22px;border:0;border-radius:12px;background:#38bdf8;color:#04121f;width:100%}
+  pre{background:#1e293b;padding:12px;border-radius:8px;white-space:pre-wrap;font-size:13px}
+</style>
+</head>
+<body>
+<h2>iPhone → Dashboard</h2>
+<button id="go">Bắt đầu gửi dữ liệu</button>
+<p id="status">Chưa kết nối</p>
+<pre id="log"></pre>
+<script>
+const params = new URLSearchParams(location.search);
+const token = params.get('token') ?? '';
+const $ = (id) => document.getElementById(id);
+const state = { motion: {}, geo: null };
+let ws, timer;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws?role=sensor&token=${encodeURIComponent(token)}`);
+  ws.onopen = () => { $('status').textContent = 'Đã kết nối ✔'; };
+  ws.onclose = () => { $('status').textContent = 'Mất kết nối, thử lại…'; setTimeout(connect, 2000); };
+}
+
+async function requestPermissions() {
+  // iOS 13+ yêu cầu cấp quyền từ một thao tác bấm của người dùng.
+  const D = window.DeviceMotionEvent, O = window.DeviceOrientationEvent;
+  if (D && typeof D.requestPermission === 'function') {
+    const r = await D.requestPermission();
+    if (r !== 'granted') throw new Error('Quyền chuyển động bị từ chối');
+  }
+  if (O && typeof O.requestPermission === 'function') await O.requestPermission();
+}
+
+function start() {
+  window.addEventListener('devicemotion', (e) => {
+    const a = e.accelerationIncludingGravity ?? {};
+    Object.assign(state.motion, { ax: a.x, ay: a.y, az: a.z });
+  });
+  window.addEventListener('deviceorientation', (e) => {
+    Object.assign(state.motion, {
+      alpha: e.alpha, beta: e.beta, gamma: e.gamma,
+      heading: typeof e.webkitCompassHeading === 'number' ? e.webkitCompassHeading : null,
+    });
+  });
+  navigator.geolocation?.watchPosition(
+    (p) => { state.geo = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, speed: p.coords.speed ?? 0, alt: p.coords.altitude }; },
+    (err) => { $('log').textContent = 'GPS: ' + err.message; },
+    { enableHighAccuracy: true, maximumAge: 1000 }
+  );
+  timer = setInterval(() => {
+    if (ws?.readyState !== 1) return;
+    const c = navigator.connection;
+    const payload = { motion: state.motion, geo: state.geo, net: { online: navigator.onLine, type: c?.effectiveType ?? null, downlink: c?.downlink ?? null } };
+    ws.send(JSON.stringify(payload));
+    $('log').textContent = JSON.stringify(payload, null, 2);
+  }, 100);
+}
+
+$('go').onclick = async () => {
+  try {
+    await requestPermissions();
+    connect();
+    start();
+    $('go').disabled = true;
+    // Giữ màn hình sáng để Safari không tạm dừng cảm biến.
+    navigator.wakeLock?.request('screen').catch(() => {});
+  } catch (e) { $('status').textContent = e.message; }
+};
+</script>
+</body>
+</html>

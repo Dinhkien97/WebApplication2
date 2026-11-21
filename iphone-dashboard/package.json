@@ -1,0 +1,15 @@
+{
+  "name": "iphone-dashboard",
+  "version": "1.0.0",
+  "description": "Stream iPhone sensors (motion, GPS) to a realtime dashboard",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.23.0"
+  }
+}
