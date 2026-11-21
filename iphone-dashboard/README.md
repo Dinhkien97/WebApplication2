@@ -2,7 +2,16 @@
 
 iPhone mở một trang web (Safari) → gửi cảm biến chuyển động, la bàn, GPS, trạng thái mạng qua WebSocket → dashboard hiển thị realtime.
 
-## Chạy
+## Xem dashboard PC trên iPhone
+1. Trên PC: `npm install && npm start`. Server in ra dòng `iPhone xem PC: http://<IP-LAN>:3000/pc.html?token=...`.
+2. iPhone nối **cùng Wi-Fi** với PC, mở link đó trong Safari (HTTP là đủ, không cần cấp quyền cảm biến).
+3. Nếu không vào được: cho phép Node.js/cổng 3000 qua Windows Firewall (mạng Private).
+4. Muốn xem từ ngoài nhà: dùng Tailscale hoặc tunnel HTTPS, không mở cổng thẳng ra Internet.
+
+Hiển thị: CPU tổng + từng lõi, RAM, ổ đĩa, uptime, load (Linux/macOS).
+Server chỉ thu thập số liệu khi có người đang xem.
+
+## Chạy (chế độ cảm biến iPhone → dashboard)
 ```bash
 npm install
 DASH_TOKEN=<chuoi-bi-mat> npm start     # không đặt thì server tự sinh token và in ra

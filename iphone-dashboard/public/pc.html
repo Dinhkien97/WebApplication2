@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>PC Dashboard</title>
+<style>
+  :root{--bg:#0f172a;--card:#1e293b;--fg:#e2e8f0;--mut:#94a3b8;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;--a:#38bdf8}
+  *{box-sizing:border-box}
+  body{margin:0;padding:max(16px,env(safe-area-inset-top)) 16px 24px;background:var(--bg);color:var(--fg);font-family:-apple-system,system-ui,sans-serif}
+  header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  h2{margin:0;font-size:20px} small{color:var(--mut)}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--bad);margin-right:6px}
+  .dot.on{background:var(--ok)}
+  .card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:12px}
+  .card h3{margin:0 0 6px;font-size:12px;color:var(--mut);font-weight:500;text-transform:uppercase;letter-spacing:.05em}
+  .big{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums}
+  .bar{height:8px;background:#334155;border-radius:4px;overflow:hidden;margin:8px 0 4px}
+  .bar>i{display:block;height:100%;width:0;background:var(--ok);transition:width .4s,background .4s}
+  canvas{width:100%;height:90px;display:block}
+  .cores{display:grid;grid-template-columns:repeat(auto-fill,minmax(54px,1fr));gap:6px;margin-top:8px}
+  .core{text-align:center;font-size:11px;color:var(--mut)}
+  .core .bar{height:36px;margin:2px 0;display:flex;align-items:flex-end}
+  .core .bar>i{width:100%;height:0}
+  .row{display:flex;justify-content:space-between;padding:3px 0;font-size:14px}
+</style>
+</head>
+<body>
+<header><div><h2 id="host">PC</h2><small id="plat">–</small></div><div><span class="dot" id="dot"></span><span id="conn">Đang kết nối…</span></div></header>
+
+<div class="card"><h3>CPU</h3><div class="big" id="cpu">–</div><small id="model"></small>
+  <canvas id="chart"></canvas><div class="cores" id="cores"></div></div>
+<div class="card"><h3>RAM</h3><div class="big" id="mem">–</div><div class="bar"><i id="memb"></i></div><small id="memd"></small></div>
+<div class="card"><h3>Ổ đĩa</h3><div class="big" id="disk">–</div><div class="bar"><i id="diskb"></i></div><small id="diskd"></small></div>
+<div class="card"><h3>Hệ thống</h3>
+  <div class="row"><span>Uptime</span><b id="up">–</b></div>
+  <div class="row"><span>Load (1/5/15 phút)</span><b id="load">–</b></div>
+  <div class="row"><span>Cập nhật</span><b id="age">–</b></div></div>
+
+<script>
+const token = new URLSearchParams(location.search).get('token') ?? '';
+const $ = (id) => document.getElementById(id);
+const HISTORY = 60, hist = [];
+let lastT = 0;
+const gb = (b) => (b / 1024 ** 3).toFixed(1) + ' GB';
+const color = (p) => (p >= 90 ? 'var(--bad)' : p >= 70 ? 'var(--warn)' : 'var(--ok)');
+
+function setBar(id, p) { const el = $(id); el.style.width = p + '%'; el.style.background = color(p); }
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws?role=pc&token=${encodeURIComponent(token)}`);
+  ws.onopen = () => { $('dot').classList.add('on'); $('conn').textContent = 'Trực tiếp'; };
+  ws.onclose = () => { $('dot').classList.remove('on'); $('conn').textContent = 'Mất kết nối'; setTimeout(connect, 2000); };
+  ws.onmessage = (e) => { try { render(JSON.parse(e.data)); } catch {} };
+}
+
+function fmtUp(s) { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return `${d ? d + 'd ' : ''}${h}h ${m}m`; }
+
+function render(d) {
+  lastT = d.t;
+  $('host').textContent = d.host; $('plat').textContent = d.platform; $('model').textContent = d.model;
+  $('cpu').textContent = d.cpu.toFixed(0) + '%';
+  hist.push(d.cpu); if (hist.length > HISTORY) hist.shift(); drawChart();
+  const box = $('cores');
+  if (box.children.length !== d.cores.length) {
+    box.innerHTML = d.cores.map((_, i) => `<div class="core"><div class="bar"><i></i></div>${i}</div>`).join('');
+  }
+  d.cores.forEach((p, i) => { const el = box.children[i].querySelector('i'); el.style.height = p + '%'; el.style.background = color(p); });
+  const mp = d.mem.used / d.mem.total * 100;
+  $('mem').textContent = mp.toFixed(0) + '%'; setBar('memb', mp); $('memd').textContent = `${gb(d.mem.used)} / ${gb(d.mem.total)}`;
+  if (d.disk) {
+    const dp = d.disk.used / d.disk.total * 100;
+    $('disk').textContent = dp.toFixed(0) + '%'; setBar('diskb', dp); $('diskd').textContent = `${gb(d.disk.used)} / ${gb(d.disk.total)}`;
+  }
+  $('up').textContent = fmtUp(d.uptime);
+  $('load').textContent = d.load.every((v) => v === 0) ? 'n/a (Windows)' : d.load.map((v) => v.toFixed(2)).join(' / ');
+}
+
+function drawChart() {
+  const c = $('chart'), r = devicePixelRatio || 1;
+  c.width = c.clientWidth * r; c.height = c.clientHeight * r;
+  const g = c.getContext('2d'); g.setTransform(r, 0, 0, r, 0, 0);
+  const w = c.clientWidth, h = c.clientHeight;
+  g.strokeStyle = '#38bdf8'; g.lineWidth = 2; g.beginPath();
+  hist.forEach((v, i) => { const x = i / (HISTORY - 1) * w, y = h - v / 100 * h; i ? g.lineTo(x, y) : g.moveTo(x, y); });
+  g.stroke();
+}
+
+setInterval(() => { $('age').textContent = lastT ? ((Date.now() - lastT) / 1000).toFixed(0) + ' s trước' : '–'; }, 1000);
+connect();
+</script>
+</body>
+</html>

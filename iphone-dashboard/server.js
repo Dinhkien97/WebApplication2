@@ -6,6 +6,8 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { sanitizeReading } from './validate.js';
+import os from 'node:os';
+import { createCollector } from './metrics.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const TOKEN = process.env.DASH_TOKEN || crypto.randomBytes(12).toString('hex');
@@ -42,12 +44,20 @@ const server = CERT && KEY
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
 const dashboards = new Set();
 let latest = null;
+const pcViewers = new Set();
+let latestPc = null;
 
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, 'http://x');
   const role = url.searchParams.get('role');
-  if (!tokenOk(url.searchParams.get('token')) || (role !== 'sensor' && role !== 'dashboard')) {
+  if (!tokenOk(url.searchParams.get('token')) || (role !== 'sensor' && role !== 'dashboard' && role !== 'pc')) {
     ws.close(1008, 'unauthorized');
+    return;
+  }
+  if (role === 'pc') {
+    pcViewers.add(ws);
+    if (latestPc) ws.send(JSON.stringify(latestPc));
+    ws.on('close', () => pcViewers.delete(ws));
     return;
   }
   if (role === 'dashboard') {
@@ -66,9 +76,23 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+const collect = createCollector();
+setInterval(async () => {
+  if (pcViewers.size === 0) return;
+  latestPc = await collect();
+  const msg = JSON.stringify(latestPc);
+  for (const v of pcViewers) if (v.readyState === 1) v.send(msg);
+}, 1000);
+
+function lanAddresses() {
+  return Object.values(os.networkInterfaces()).flat()
+    .filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => i.address);
+}
+
 server.listen(PORT, () => {
   const scheme = CERT && KEY ? 'https' : 'http';
   console.log(`Dashboard : ${scheme}://localhost:${PORT}/?token=${TOKEN}`);
   console.log(`iPhone    : ${scheme}://<host>:${PORT}/sensor.html?token=${TOKEN}`);
+  for (const ip of lanAddresses()) console.log(`iPhone xem PC: ${scheme}://${ip}:${PORT}/pc.html?token=${TOKEN}`);
   if (scheme === 'http') console.log('Lưu ý: Safari trên iPhone chỉ cấp cảm biến/GPS trên HTTPS (xem README).');
 });
